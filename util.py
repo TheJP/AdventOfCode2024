@@ -104,6 +104,8 @@ def find_example(part):
     if example is None:
         print("< failed to find example")
 
+    return example_result
+
 parts = bs.find_all("article", class_="day-desc")
 example_result_1 = find_example(parts[0])
 
@@ -113,7 +115,7 @@ class MyEventHandler(FileSystemEventHandler):
         self.last_run = time.time()
 
     def on_any_event(self, event: FileSystemEvent) -> None:
-        global day_dir
+        global day_dir, example_result_1
 
         if event.event_type != "modified":
             return
@@ -125,11 +127,15 @@ class MyEventHandler(FileSystemEventHandler):
             return
         self.last_run = now
 
-        print(f"> run '{self.path}'")
+        print(f"> run '{self.path}' example.in")
         result = subprocess.run(["python", self.path, os.path.join(day_dir, "example.in")], stdout=subprocess.PIPE)
         output = result.stdout.decode("utf-8").strip()
         print(output)
-
+        if output == example_result_1:
+            print(f"> run '{self.path}' task.in")
+            result = subprocess.run(["python", self.path, os.path.join(day_dir, "task.in")], stdout=subprocess.PIPE)
+            output = result.stdout.decode("utf-8").strip()
+            print(output)
 
 event_handler = MyEventHandler(f"{day_dir}/one.py")
 observer = Observer()
