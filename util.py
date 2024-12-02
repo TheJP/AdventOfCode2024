@@ -1,28 +1,53 @@
+from __future__ import annotations
 from datetime import datetime
+from datetime import time as dt_time
+from enum import Enum
 import os
 import shutil
 import subprocess
 import sys
 import time
+
+from pytz import timezone
 import requests
 from bs4 import BeautifulSoup
-from watchdog.events import FileSystemEvent, FileSystemEventHandler
+from watchdog.events import DirModifiedEvent, FileModifiedEvent, FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-YEAR = "2024"
+TIMEZONE = timezone("CET")
 SESSION_FILE = ".session.private"
 TEMPLATE_FILE = ".template.py.private"
+EXAMPLE_FILE = "example.in"
+EXAMPLE2_FILE = "example2.in"
+TASK_FILE = "task.in"
+LEVEL1_FILE = "one.py"
+LEVEL2_FILE = "two.py"
 
 # Day
-day = datetime.now().day
-print(f"day? [{day}] ", end="", flush=True)
-
-input = sys.stdin.readline().strip()
-if input.isdecimal() and 1 <= int(input) and int(input) <= 25:
-    day = int(input)
-elif input.strip() != "":
-    print("< invalid input")
+if len(sys.argv) > 2:
+    print(f"Usage: {sys.argv[0]} [[YEAR/]DAY]")
     exit(1)
+
+now = datetime.now(TIMEZONE)
+year, day = now.year, now.day
+if len(sys.argv) == 2:
+    input = sys.argv[1].strip()
+    split_input = input.split("/")
+
+    year_input = split_input[0]
+    if len(split_input) == 2:
+        if year_input.isdecimal() and 2015 <= int(year_input):
+            year = int(year_input)
+        else:
+            print("< invalid year")
+            exit(1)
+
+    day_input = split_input[-1]
+    if len(split_input) <= 2 and day_input.isdecimal() and 1 <= int(day_input) <= 25:
+        day = int(day_input)
+    elif input.strip() != "":
+        print("< invalid day")
+        exit(1)
 
 # Session
 if not os.path.isfile(SESSION_FILE):
@@ -42,24 +67,95 @@ with open(SESSION_FILE, encoding="utf-8") as f:
 print("> creating files")
 day_dir = f"day{day:02}"
 os.makedirs(day_dir, exist_ok=True)
-if not os.path.isfile(f"{day_dir}/one.py"):
-    shutil.copy2(TEMPLATE_FILE, f"{day_dir}/one.py")
-# for file_name in ["example.in", "task.in", "one.py"]:
-#     os.system(f"touch {day_dir}/{file_name} && code {day_dir}/{file_name}")
+if not os.path.isfile(f"{day_dir}/{LEVEL1_FILE}") and os.path.isfile(TEMPLATE_FILE):
+    shutil.copy2(TEMPLATE_FILE, f"{day_dir}/{LEVEL1_FILE}")
+for file_name in [EXAMPLE_FILE, TASK_FILE, LEVEL1_FILE]:
+    os.system(f"touch {day_dir}/{file_name} && code {day_dir}/{file_name}")
 
-url = f"https://adventofcode.com/{YEAR}/day/{day}"
+url = f"https://adventofcode.com/{year}/day/{day}"
 def fetch(url) -> requests.Response:
     global session
-    print(f"> fetching '{url}'")
-    response = requests.get(url, cookies={ "session": session })
 
-    if response.status_code < 200 or 300 <= response.status_code:
-        print(f"< failed: status code == {response.status_code}")
-        print("< response:")
-        print(response.text.strip())
-        exit(2)
+    while True:
+        print(f"> fetching '{url}'")
+        response = requests.get(url, cookies={ "session": session })
 
-    return response
+        if response.status_code == 404:
+            now = datetime.now(TIMEZONE)
+            start = datetime.combine(now, dt_time(hour=6), now.tzinfo)
+            until_start = (start - now).total_seconds()
+            if until_start <= 1:
+                print("< 404 (retry right away)")
+                time.sleep(0.1)
+            else:
+                print(f"< 404 (retry in {until_start}s)")
+                time.sleep(until_start - 1)
+            continue
+
+        if 500 <= response.status_code < 600:
+            print(f"< {response.status_code} (retry in 1s)")
+            time.sleep(1)
+            continue
+
+        if not (200 <= response.status_code < 300):
+            print(f"< failed: status code == {response.status_code}")
+            print("< response:")
+            print(response.text.strip())
+            exit(2)
+
+        return response
+
+class SubmissionResult(Enum):
+    CORRECT = 0
+    INCORRECT = 1
+    TOO_RECENT = 2
+    WRONG_LEVEL = 3
+    UNKNOWN = 4
+
+    @staticmethod
+    def from_response(response: str) -> SubmissionResult:
+        if response.startswith("That's the right answer!"):
+            return SubmissionResult.CORRECT
+        elif response.startswith("That's not the right answer"):
+            return SubmissionResult.INCORRECT
+        elif response.startswith("You gave an answer too recently"):
+            return SubmissionResult.TOO_RECENT
+        elif response.startswith("You don't seem to be solving the right level"):
+            return SubmissionResult.WRONG_LEVEL
+        else:
+            return SubmissionResult.UNKNOWN
+
+
+def submit(solution: str, level: int) -> SubmissionResult:
+    global url, session
+
+    post_url = f"{url}/answer"
+    while True:
+        print(f"> posting '{post_url}'")
+        data = {
+            "level": str(level),
+            "answer": solution,
+            "submit": "[Submit]",
+        }
+        response = requests.post(post_url, data, cookies={ "session": session })
+
+        if 500 <= response.status_code < 600:
+            print(f"< {response.status_code} (retry in 1s)")
+            time.sleep(1)
+            continue
+
+        if not (200 <= response.status_code < 300):
+            print(f"< failed: status code == {response.status_code}")
+            print("< response:")
+            print(response.text.strip())
+            exit(2)
+
+        bs = BeautifulSoup(response.content, "lxml")
+        response_text = bs.find("article").find("p").get_text().strip()
+        response_type = SubmissionResult.from_response(response_text)
+        print(f"< {response_type.name} '{response_text}'")
+
+        return response_type
 
 # Fetch Input
 input_url = f"{url}/input"
@@ -67,12 +163,7 @@ response = fetch(input_url)
 with open(f"{day_dir}/task.in", mode="w", encoding="utf-8") as f:
     f.write(response.text)
 
-# Fetch Task
-response = fetch(url)
-bs = BeautifulSoup(response.content, "lxml")
-# bs = BeautifulSoup(response.content, "html.parser")  # <-- without lxml requirement
-
-def find_example(part):
+def find_example_result(part) -> str | None:
     # Result of Example
     example_result = None
     for code in reversed(part.find_all("code")):
@@ -85,6 +176,9 @@ def find_example(part):
     if input != "":
         example_result = input
 
+    return example_result
+
+def find_example(part, filename: str) -> bool:
     # Example
     example = None
     for code in part.find_all("pre"):
@@ -97,29 +191,53 @@ def find_example(part):
             example = code.get_text()
             print("< found example")
             print(example)
-            with open(f"{day_dir}/example.in", mode="w", encoding="utf-8") as f:
+            with open(f"{day_dir}/{filename}", mode="w", encoding="utf-8") as f:
                 f.write(example)
             break
 
     if example is None:
         print("< failed to find example")
 
-    return example_result
+    return example is not None
 
-parts = bs.find_all("article", class_="day-desc")
-example_result_1 = find_example(parts[0])
+# Fetch Task
+example_result_1 = None
+example_result_2 = None
+has_example_2 = False
+level = 1
 
-class MyEventHandler(FileSystemEventHandler):
-    def __init__(self, path: str) -> None:
+def scrape():
+    global example_result_1, example_result_2, has_example_2, level
+
+    response = fetch(url)
+    bs = BeautifulSoup(response.content, "lxml")
+    # bs = BeautifulSoup(response.content, "html.parser")  # <-- without lxml requirement
+
+    parts = bs.find_all("article", class_="day-desc")
+    level = len(parts)
+    assert(1 <= level <= 2)
+    print(f"< part {level}")
+
+    if example_result_1 is None:
+        example_result_1 = find_example_result(parts[0])
+        find_example(parts[0], EXAMPLE_FILE)
+    if example_result_2 is None and level >= 2:
+        example_result_2 = find_example_result(parts[1])
+        has_example_2 = find_example(parts[1], EXAMPLE2_FILE)
+
+scrape()
+
+class RunOnModification(FileSystemEventHandler):
+    def __init__(self, path: str, expected_result: str | None, example_file: str = EXAMPLE_FILE) -> None:
         self.path = path
+        self.dir = os.path.dirname(path)
+        self.expected_result = expected_result
         self.last_run = time.time()
+        self.output = None
+        self.example_file = example_file
 
-    def on_any_event(self, event: FileSystemEvent) -> None:
-        global day_dir, example_result_1
-
-        if event.event_type != "modified":
-            return
-        if not os.path.samefile(self.path, event.src_path):
+    def on_modified(self, event: DirModifiedEvent | FileModifiedEvent) -> None:
+        if not os.path.isfile(self.path) or not os.path.samefile(self.path, event.src_path):
             return
 
         now = time.time()
@@ -127,32 +245,78 @@ class MyEventHandler(FileSystemEventHandler):
             return
         self.last_run = now
 
-        print(f"> run '{self.path}' example.in")
-        result = subprocess.run(["python", self.path, os.path.join(day_dir, "example.in")], stdout=subprocess.PIPE)
+        self.check()
+
+
+    def check(self):
+        output = self.run(self.example_file)
+        if output == self.expected_result:
+            self.output = self.run(TASK_FILE)
+
+
+    def run(self, input_file: str) -> str:
+        print(f"> run '{self.path}' {input_file}")
+        result = subprocess.run(["python", self.path, os.path.join(self.dir, input_file)], stdout=subprocess.PIPE)
         output = result.stdout.decode("utf-8").strip()
         print(output)
-        if output == example_result_1:
-            print(f"> run '{self.path}' task.in")
-            result = subprocess.run(["python", self.path, os.path.join(day_dir, "task.in")], stdout=subprocess.PIPE)
-            output = result.stdout.decode("utf-8").strip()
-            print(output)
+        return output
 
-event_handler = MyEventHandler(f"{day_dir}/one.py")
+
 observer = Observer()
-observer.schedule(event_handler, day_dir, recursive=True)
+event_handler_1 = RunOnModification(f"{day_dir}/{LEVEL1_FILE}", example_result_1)
+watch_1 = observer.schedule(event_handler_1, day_dir, recursive=False)
+event_handler_2 = RunOnModification(f"{day_dir}/{LEVEL2_FILE}", example_result_2)
+watch_2 = observer.schedule(event_handler_2, day_dir, recursive=False)
 observer.start()
-try:
-    while True:
-        if sys.stdin.readable():
-            command = sys.stdin.readline().strip()
-            if command in ["q", "quit"]:
-                exit(0)
-            if command in ["s", "submit"]:
-                break
-        time.sleep(0.01)
-finally:
-    observer.stop()
-    observer.join()
 
-if command in ["s", "submit"]:
-    print("< submit solution")
+def update_handlers():
+    global example_result_1, example_result_2, has_example_2
+    global event_handler_1, event_handler_2
+
+    event_handler_1.expected_result = example_result_1
+    event_handler_2.expected_result = example_result_2
+    event_handler_2.example_file = EXAMPLE2_FILE if has_example_2 else EXAMPLE_FILE
+
+while True:
+    if sys.stdin.readable():
+        command = sys.stdin.readline().strip()
+        if command in ["q", "quit"]:
+            break
+        elif command in ["f", "fetch"]:
+            scrape()
+            update_handlers()
+        elif command in ["i", "info"]:
+            print(f"< {level=} {example_result_1=} {example_result_2=} {has_example_2=}")
+        if command == "cp":
+            if os.path.isfile(f"{day_dir}/{LEVEL2_FILE}"):
+                shutil.copy2(f"{day_dir}/{LEVEL2_FILE}", f"{day_dir}/{os.urandom(16).hex()}.py")
+            shutil.copy2(f"{day_dir}/{LEVEL1_FILE}", f"{day_dir}/{LEVEL2_FILE}")
+        elif command in ["s", "submit"]:
+            if (level == 1 and event_handler_1.output == None) or (level == 2 and event_handler_2.output == None):
+                print("< failed to submit solution: solution not computed yet")
+                continue
+
+            print(f"> submit solution ({event_handler_1.output})")
+            if level == 1:
+                response = submit(event_handler_1.output, 1)
+            elif level == 2:
+                response = submit(event_handler_2.output, 2)
+                if response == SubmissionResult.CORRECT:
+                    break
+            scrape()
+            update_handlers()
+        elif command in ["c", "check"]:
+            handler = event_handler_1 if level == 1 else event_handler_2
+            handler.check()
+        elif command.startswith("r") or command.startswith("run"):
+            handler = event_handler_1 if level == 1 else event_handler_2
+            arguments = command.split()[1:]
+            if len(arguments) == 0:
+                arguments = [handler.example_file]
+            for argument in arguments:
+                handler.run(argument)
+
+    time.sleep(0.01)
+
+observer.stop()
+observer.join()

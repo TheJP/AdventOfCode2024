@@ -16,7 +16,7 @@ input = open(sys.argv[1]).read().splitlines()
 safe = 0
 for line in input:
     numbers = list(map(int, line.split()))
-    if any(is_safe([*numbers[0:i], *numbers[(i+1)::]]) for i in range(len(numbers))):
+    if any(is_safe([*numbers[:i], *numbers[i+1:]]) for i in range(len(numbers))):
         safe += 1
 
 print(safe)
