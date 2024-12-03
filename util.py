@@ -88,7 +88,7 @@ def fetch(url) -> requests.Response:
                 print("< 404 (retry right away)")
                 time.sleep(0.1)
             else:
-                print(f"< 404 (retry in {until_start}s)")
+                print(f"< 404 (retry in {until_start:.1f}s)")
                 time.sleep(until_start - 1)
             continue
 
