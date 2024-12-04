@@ -23,6 +23,8 @@ TASK_FILE = "task.in"
 LEVEL1_FILE = "one.py"
 LEVEL2_FILE = "two.py"
 
+auto_submit = True
+
 # Day
 if len(sys.argv) > 2:
     print(f"Usage: {sys.argv[0]} [[YEAR/]DAY]")
@@ -171,11 +173,11 @@ def find_example_result(part) -> str | None:
             example_result = code.get_text()
             break
 
-    print(f"example result? {'' if example_result is None else f'[{example_result}] '}", end="", flush=True)
-    input = sys.stdin.readline().strip()
-    if input != "":
-        example_result = input
+    if example_result is None:
+        print("example result? ", end="", flush=True)
+        example_result = sys.stdin.readline().strip()
 
+    print(f"< example result == '{example_result}'")
     return example_result
 
 def find_example(part, filename: str) -> bool:
@@ -216,25 +218,28 @@ def scrape():
     parts = bs.find_all("article", class_="day-desc")
     level = len(parts)
     assert(1 <= level <= 2)
-    print(f"< part {level}")
 
     if example_result_1 is None:
+        print("< part 1")
         example_result_1 = find_example_result(parts[0])
         find_example(parts[0], EXAMPLE_FILE)
     if example_result_2 is None and level >= 2:
+        print("< part 2")
         example_result_2 = find_example_result(parts[1])
         has_example_2 = find_example(parts[1], EXAMPLE2_FILE)
 
 scrape()
 
 class RunOnModification(FileSystemEventHandler):
-    def __init__(self, path: str, expected_result: str | None, example_file: str = EXAMPLE_FILE) -> None:
+    def __init__(self, path: str, expected_result: str | None, level: int = 1, example_file: str = EXAMPLE_FILE) -> None:
         self.path = path
         self.dir = os.path.dirname(path)
         self.expected_result = expected_result
+        self.level = level
         self.last_run = time.time()
-        self.output = None
+        self.output: str | None = None
         self.example_file = example_file
+
 
     def on_modified(self, event: DirModifiedEvent | FileModifiedEvent) -> None:
         if not os.path.isfile(self.path) or not os.path.samefile(self.path, event.src_path):
@@ -245,29 +250,44 @@ class RunOnModification(FileSystemEventHandler):
             return
         self.last_run = now
 
-        self.check()
+        try:
+            self.check()
+        except KeyboardInterrupt:
+            print("< abort run (ctrl+c)")
 
 
     def check(self):
+        global auto_submit
+
         output = self.run(self.example_file)
         if output == self.expected_result:
             self.output = self.run(TASK_FILE)
+            if auto_submit:
+                print("> attempt auto-submit")
+                submit(self.output, self.level)
+                scrape()
+                update_handlers()
 
 
-    def run(self, input_file: str) -> str:
-        print(f"> run '{self.path}' {input_file}")
-        result = subprocess.run(["python", self.path, os.path.join(self.dir, input_file)], stdout=subprocess.PIPE)
-        output = result.stdout.decode("utf-8").strip()
-        print(output)
-        return output
+    def run(self, input_file: str) -> str | None:
+        try:
+            print(f"> run '{self.path}' {input_file}")
+            result = subprocess.run(["python", self.path, os.path.join(self.dir, input_file)], stdout=subprocess.PIPE)
+            output = result.stdout.decode("utf-8").strip()
+            print(output)
+            return output
+        except KeyboardInterrupt:
+            print("< abort run (ctrl+c)")
+            return None
 
 
 observer = Observer()
-event_handler_1 = RunOnModification(f"{day_dir}/{LEVEL1_FILE}", example_result_1)
+event_handler_1 = RunOnModification(f"{day_dir}/{LEVEL1_FILE}", example_result_1, level=1)
 watch_1 = observer.schedule(event_handler_1, day_dir, recursive=False)
-event_handler_2 = RunOnModification(f"{day_dir}/{LEVEL2_FILE}", example_result_2)
+event_handler_2 = RunOnModification(f"{day_dir}/{LEVEL2_FILE}", example_result_2, level=2)
 watch_2 = observer.schedule(event_handler_2, day_dir, recursive=False)
 observer.start()
+
 
 def update_handlers():
     global example_result_1, example_result_2, has_example_2
@@ -277,17 +297,25 @@ def update_handlers():
     event_handler_2.expected_result = example_result_2
     event_handler_2.example_file = EXAMPLE2_FILE if has_example_2 else EXAMPLE_FILE
 
+
 while True:
-    if sys.stdin.readable():
+    try:
+        if not sys.stdin.readable():
+            time.sleep(0.01)
+            continue
+
         command = sys.stdin.readline().strip()
         if command in ["q", "quit"]:
             break
+        elif command in ["as", "auto-submit"]:
+            auto_submit = not auto_submit
+            print(f"< {auto_submit = }")
         elif command in ["f", "fetch"]:
             scrape()
             update_handlers()
         elif command in ["i", "info"]:
             print(f"< {level=} {example_result_1=} {example_result_2=} {has_example_2=}")
-        if command == "cp":
+        elif command == "cp":
             if os.path.isfile(f"{day_dir}/{LEVEL2_FILE}"):
                 shutil.copy2(f"{day_dir}/{LEVEL2_FILE}", f"{day_dir}/{os.urandom(16).hex()}.py")
             shutil.copy2(f"{day_dir}/{LEVEL1_FILE}", f"{day_dir}/{LEVEL2_FILE}")
@@ -308,6 +336,11 @@ while True:
         elif command in ["c", "check"]:
             handler = event_handler_1 if level == 1 else event_handler_2
             handler.check()
+        elif command.startswith("e") or command.startswith("expect"):
+            handler = event_handler_1 if level == 1 else event_handler_2
+            arguments = command.split(maxsplit=1)
+            handler.expected_result = arguments[-1]
+            print(f"< example result == '{handler.expected_result}'")
         elif command.startswith("r") or command.startswith("run"):
             handler = event_handler_1 if level == 1 else event_handler_2
             arguments = command.split()[1:]
@@ -315,8 +348,10 @@ while True:
                 arguments = [handler.example_file]
             for argument in arguments:
                 handler.run(argument)
-
-    time.sleep(0.01)
+        else:
+            print("< unknown command")
+    except KeyboardInterrupt:
+        print("< use 'q' or 'quit' to exit")
 
 observer.stop()
 observer.join()
