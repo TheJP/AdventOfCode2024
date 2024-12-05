@@ -71,8 +71,8 @@ day_dir = f"day{day:02}"
 os.makedirs(day_dir, exist_ok=True)
 if not os.path.isfile(f"{day_dir}/{LEVEL1_FILE}") and os.path.isfile(TEMPLATE_FILE):
     shutil.copy2(TEMPLATE_FILE, f"{day_dir}/{LEVEL1_FILE}")
-for file_name in [EXAMPLE_FILE, TASK_FILE, LEVEL1_FILE]:
-    os.system(f"touch {day_dir}/{file_name} && code {day_dir}/{file_name}")
+all_files = " ".join([f"{day_dir}/{file_name}" for file_name in [LEVEL1_FILE, EXAMPLE_FILE, TASK_FILE]])
+os.system(f"touch {all_files} && code {all_files}")
 
 url = f"https://adventofcode.com/{year}/day/{day}"
 def fetch(url) -> requests.Response:
@@ -264,7 +264,9 @@ class RunOnModification(FileSystemEventHandler):
             self.output = self.run(TASK_FILE)
             if auto_submit:
                 print("> attempt auto-submit")
-                submit(self.output, self.level)
+                response = submit(self.output, self.level)
+                if self.level == 2 and response == SubmissionResult.CORRECT:
+                    exit(0)
                 scrape()
                 update_handlers()
 
@@ -305,6 +307,8 @@ while True:
             continue
 
         command = sys.stdin.readline().strip()
+        handler = event_handler_1 if level == 1 else event_handler_2
+
         if command in ["q", "quit"]:
             break
         elif command in ["as", "auto-submit"]:
@@ -320,29 +324,23 @@ while True:
                 shutil.copy2(f"{day_dir}/{LEVEL2_FILE}", f"{day_dir}/{os.urandom(16).hex()}.py")
             shutil.copy2(f"{day_dir}/{LEVEL1_FILE}", f"{day_dir}/{LEVEL2_FILE}")
         elif command in ["s", "submit"]:
-            if (level == 1 and event_handler_1.output == None) or (level == 2 and event_handler_2.output == None):
+            if handler.output is None:
                 print("< failed to submit solution: solution not computed yet")
                 continue
 
             print(f"> submit solution ({event_handler_1.output})")
-            if level == 1:
-                response = submit(event_handler_1.output, 1)
-            elif level == 2:
-                response = submit(event_handler_2.output, 2)
-                if response == SubmissionResult.CORRECT:
-                    break
+            response = submit(handler.output, level)
+            if level == 2 and response == SubmissionResult.CORRECT:
+                break
             scrape()
             update_handlers()
         elif command in ["c", "check"]:
-            handler = event_handler_1 if level == 1 else event_handler_2
             handler.check()
         elif command.startswith("e") or command.startswith("expect"):
-            handler = event_handler_1 if level == 1 else event_handler_2
             arguments = command.split(maxsplit=1)
             handler.expected_result = arguments[-1]
             print(f"< example result == '{handler.expected_result}'")
         elif command.startswith("r") or command.startswith("run"):
-            handler = event_handler_1 if level == 1 else event_handler_2
             arguments = command.split()[1:]
             if len(arguments) == 0:
                 arguments = [handler.example_file]
