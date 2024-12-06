@@ -302,6 +302,8 @@ def update_handlers():
 
 while True:
     try:
+        if sys.stdin.closed:
+            break
         if not sys.stdin.readable():
             time.sleep(0.01)
             continue
@@ -336,9 +338,15 @@ while True:
             update_handlers()
         elif command in ["c", "check"]:
             handler.check()
+        elif command.startswith("ef") or command.startswith("example-file"):
+            arguments = command.split(maxsplit=1)
+            if len(arguments) == 2:
+                handler.example_file = arguments[1]
+            print(f"< example file == '{handler.example_file}'")
         elif command.startswith("e") or command.startswith("expect"):
             arguments = command.split(maxsplit=1)
-            handler.expected_result = arguments[-1]
+            if len(arguments) == 2:
+                handler.expected_result = arguments[1]
             print(f"< example result == '{handler.expected_result}'")
         elif command.startswith("r") or command.startswith("run"):
             arguments = command.split()[1:]
