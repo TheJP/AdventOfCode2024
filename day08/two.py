@@ -16,7 +16,7 @@ for y in range(1, len(map) - 1):
 
 def add(x, y) -> bool:
     global anti, map
-    if x < 1 or y < 1 or y >= len(map) -1 or x >= len(map[y]) - 1:
+    if x < 1 or y < 1 or y >= len(map) - 1 or x >= len(map[y]) - 1:
         return False
     anti.add((x, y))
     return True

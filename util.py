@@ -3,9 +3,11 @@ from datetime import datetime
 from datetime import time as dt_time
 from enum import Enum
 import os
+import queue
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 from pytz import timezone
@@ -24,6 +26,7 @@ LEVEL1_FILE = "one.py"
 LEVEL2_FILE = "two.py"
 
 auto_submit = True
+done = False
 
 # Day
 if len(sys.argv) > 2:
@@ -257,7 +260,7 @@ class RunOnModification(FileSystemEventHandler):
 
 
     def check(self):
-        global auto_submit
+        global auto_submit, done
 
         output = self.run(self.example_file)
         if output == self.expected_result:
@@ -265,8 +268,9 @@ class RunOnModification(FileSystemEventHandler):
             if auto_submit:
                 print("> attempt auto-submit")
                 response = submit(self.output, self.level)
-                if self.level == 2 and response == SubmissionResult.CORRECT:
-                    exit(0)
+                if self.level == 2 and response == SubmissionResult.WRONG_LEVEL:
+                    done = True
+                    return
                 scrape()
                 update_handlers()
 
@@ -300,15 +304,33 @@ def update_handlers():
     event_handler_2.example_file = EXAMPLE2_FILE if has_example_2 else EXAMPLE_FILE
 
 
-while True:
-    try:
-        if sys.stdin.closed:
-            break
-        if not sys.stdin.readable():
-            time.sleep(0.01)
+lines = queue.Queue(32)
+
+
+def read_lines():
+    global lines, done
+    while not sys.stdin.closed and not done:
+        try:
+            line = sys.stdin.readline().strip()
+            lines.put(line)
+        except KeyboardInterrupt:
             continue
 
-        command = sys.stdin.readline().strip()
+
+reader_thread = threading.Thread(target=read_lines, daemon=True)
+reader_thread.start()
+
+
+while True:
+    try:
+        if sys.stdin.closed or done:
+            break
+
+        try:
+            command = lines.get(block=True, timeout=0.01)
+        except queue.Empty:
+            continue
+
         handler = event_handler_1 if level == 1 else event_handler_2
 
         if command in ["q", "quit"]:
@@ -333,6 +355,7 @@ while True:
             print(f"> submit solution ({event_handler_1.output})")
             response = submit(handler.output, level)
             if level == 2 and response == SubmissionResult.CORRECT:
+                done = True
                 break
             scrape()
             update_handlers()
@@ -354,6 +377,8 @@ while True:
                 arguments = [handler.example_file]
             for argument in arguments:
                 handler.run(argument)
+        elif command == "":
+            continue
         else:
             print("< unknown command")
     except KeyboardInterrupt:
