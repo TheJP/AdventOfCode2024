@@ -16,13 +16,14 @@ for line in input:
                 disk.append(-1)
         free = not free
 
+done_id = set()
 r = len(disk) - 1
 while r >= 1:
-    while r >= 0 and disk[r] < 0:
+    while r >= 0 and (disk[r] < 0 or disk[r] in done_id):
         r -= 1
     if r < 1:
         break
-    print(r)
+    # print(r)
 
     file_size = 0
     id = disk[r]
@@ -30,6 +31,7 @@ while r >= 1:
         if disk[i] != id:
             break
         file_size += 1
+    done_id.add(id)
 
     hole = 0
     while hole < r:
