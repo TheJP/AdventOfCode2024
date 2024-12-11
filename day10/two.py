@@ -7,13 +7,13 @@ map = border + map + border
 
 def search(x, y):
     global map
-    visited = set()
+    # visited = set()
     stack = [(x, y)]
     sum = 0
     while len(stack) != 0:
         (x, y) = stack.pop()
-        if (x, y) in visited:
-            continue
+        # if (x, y) in visited:
+        #     continue
         # visited.add((x, y))
         if map[y][x] == 9:
             sum += 1
