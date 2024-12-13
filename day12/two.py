@@ -29,7 +29,6 @@ for y0 in range(1, len(map) - 1):
                 else:
                     fence.add((x2, y2, dx, dy))
 
-        # print(t, area, fence)
         sides = 0
         for (x, y, dx, dy) in fence:
             dx2, dy2 = dy, dx
