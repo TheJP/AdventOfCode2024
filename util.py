@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from typing import List
 
 from pytz import timezone
 import requests
@@ -205,58 +206,41 @@ def find_example(part, filename: str) -> bool:
 
     return example is not None
 
-# Fetch Task
-example_result_1 = None
-example_result_2 = None
-has_example_2 = False
-level = 1
 
-def scrape():
-    global example_result_1, example_result_2, has_example_2, level
+class EventCollector(FileSystemEventHandler):
+    def __init__(self, paths: List[str]) -> None:
+        self.paths = paths
+        self.last_runs = [time.time()] * len(paths)
+        self.modified = { path: False for path in paths }
 
-    response = fetch(url)
-    bs = BeautifulSoup(response.content, "lxml")
-    # bs = BeautifulSoup(response.content, "html.parser")  # <-- without lxml requirement
 
-    parts = bs.find_all("article", class_="day-desc")
-    level = len(parts)
-    assert(1 <= level <= 2)
+    def on_modified(self, event: DirModifiedEvent | FileModifiedEvent) -> None:
+        for i, path in enumerate(self.paths):
+            if not os.path.isfile(path) or not os.path.samefile(path, event.src_path):
+                continue
 
-    if example_result_1 is None:
-        print("< part 1")
-        example_result_1 = find_example_result(parts[0])
-        find_example(parts[0], EXAMPLE_FILE)
-    if example_result_2 is None and level >= 2:
-        print("< part 2")
-        example_result_2 = find_example_result(parts[1])
-        has_example_2 = find_example(parts[1], EXAMPLE2_FILE)
+            now = time.time()
+            if now - self.last_runs[i] < 1:
+                return
+            self.last_runs[i] = now
 
-scrape()
+            self.modified[path] = True
 
-class RunOnModification(FileSystemEventHandler):
-    def __init__(self, path: str, expected_result: str | None, level: int = 1, example_file: str = EXAMPLE_FILE) -> None:
+
+    def check_and_reset(self, path: str) -> bool:
+        result, self.modified[path] = self.modified[path], False
+        return result
+
+
+class Handler(FileSystemEventHandler):
+    def __init__(self, path: str, expected_result: str | None = None, level: int = 1, example_file: str = EXAMPLE_FILE) -> None:
         self.path = path
         self.dir = os.path.dirname(path)
         self.expected_result = expected_result
         self.level = level
         self.last_run = time.time()
-        self.output: str | None = None
+        self.task_result: str | None = None
         self.example_file = example_file
-
-
-    def on_modified(self, event: DirModifiedEvent | FileModifiedEvent) -> None:
-        if not os.path.isfile(self.path) or not os.path.samefile(self.path, event.src_path):
-            return
-
-        now = time.time()
-        if now - self.last_run < 1:
-            return
-        self.last_run = now
-
-        try:
-            self.check()
-        except KeyboardInterrupt:
-            print("< abort run (ctrl+c)")
 
 
     def check(self):
@@ -264,15 +248,14 @@ class RunOnModification(FileSystemEventHandler):
 
         output = self.run(self.example_file)
         if output == self.expected_result:
-            self.output = self.run(TASK_FILE)
+            self.task_result = self.run(TASK_FILE)
             if auto_submit:
                 print("> attempt auto-submit")
-                response = submit(self.output, self.level)
+                response = submit(self.task_result, self.level)
                 if self.level == 2 and response == SubmissionResult.WRONG_LEVEL:
                     done = True
                     return
                 scrape()
-                update_handlers()
 
 
     def run(self, input_file: str) -> str | None:
@@ -287,21 +270,43 @@ class RunOnModification(FileSystemEventHandler):
             return None
 
 
+handler_1 = Handler(f"{day_dir}/{LEVEL1_FILE}", level=1)
+handler_2 = Handler(f"{day_dir}/{LEVEL2_FILE}", level=2)
+
 observer = Observer()
-event_handler_1 = RunOnModification(f"{day_dir}/{LEVEL1_FILE}", example_result_1, level=1)
-watch_1 = observer.schedule(event_handler_1, day_dir, recursive=False)
-event_handler_2 = RunOnModification(f"{day_dir}/{LEVEL2_FILE}", example_result_2, level=2)
-watch_2 = observer.schedule(event_handler_2, day_dir, recursive=False)
-observer.start()
+event_collector = EventCollector([handler_1.path, handler_2.path])
+watch_1 = observer.schedule(event_collector, day_dir, recursive=False)
 
 
-def update_handlers():
-    global example_result_1, example_result_2, has_example_2
-    global event_handler_1, event_handler_2
+# Fetch Task
+level = 0
 
-    event_handler_1.expected_result = example_result_1
-    event_handler_2.expected_result = example_result_2
-    event_handler_2.example_file = EXAMPLE2_FILE if has_example_2 else EXAMPLE_FILE
+def scrape():
+    global handler_1, handler_2, level
+
+    response = fetch(url)
+    bs = BeautifulSoup(response.content, "lxml")
+    # bs = BeautifulSoup(response.content, "html.parser")  # <-- without lxml requirement
+
+    parts = bs.find_all("article", class_="day-desc")
+    assert(1 <= len(parts) <= 2)
+    if level == len(parts):
+        return
+    level = len(parts)
+
+    if handler_1.expected_result is None:
+        print("< part 1")
+        handler_1.expected_result = find_example_result(parts[0])
+        find_example(parts[0], EXAMPLE_FILE)
+    if handler_2.expected_result is None and level >= 2:
+        print("< part 2")
+        handler_2.expected_result = find_example_result(parts[1])
+        has_example_2 = find_example(parts[1], EXAMPLE2_FILE)
+        if has_example_2:
+            handler_2.example_file = EXAMPLE2_FILE if has_example_2 else EXAMPLE_FILE
+
+
+scrape()
 
 
 lines = queue.Queue(32)
@@ -319,6 +324,7 @@ def read_lines():
 
 reader_thread = threading.Thread(target=read_lines, daemon=True)
 reader_thread.start()
+observer.start()
 
 
 while True:
@@ -326,12 +332,14 @@ while True:
         if sys.stdin.closed or done:
             break
 
+        handler = handler_1 if level == 1 else handler_2
+
         try:
             command = lines.get(block=True, timeout=0.01)
         except queue.Empty:
+            if event_collector.check_and_reset(handler.path):
+                handler.check()
             continue
-
-        handler = event_handler_1 if level == 1 else event_handler_2
 
         if command in ["q", "quit"]:
             break
@@ -340,25 +348,24 @@ while True:
             print(f"< {auto_submit = }")
         elif command in ["f", "fetch"]:
             scrape()
-            update_handlers()
         elif command in ["i", "info"]:
-            print(f"< {level=} {example_result_1=} {example_result_2=} {has_example_2=}")
+            print(f"< {level=} {auto_submit=}")
+            print(f"< {handler.expected_result=} {handler.example_file=} {handler.task_result=}")
         elif command == "cp":
             if os.path.isfile(f"{day_dir}/{LEVEL2_FILE}"):
                 shutil.copy2(f"{day_dir}/{LEVEL2_FILE}", f"{day_dir}/{os.urandom(16).hex()}.py")
             shutil.copy2(f"{day_dir}/{LEVEL1_FILE}", f"{day_dir}/{LEVEL2_FILE}")
         elif command in ["s", "submit"]:
-            if handler.output is None:
+            if handler.task_result is None:
                 print("< failed to submit solution: solution not computed yet")
                 continue
 
-            print(f"> submit solution ({event_handler_1.output})")
-            response = submit(handler.output, level)
+            print(f"> submit solution ({handler_1.task_result})")
+            response = submit(handler.task_result, level)
             if level == 2 and response == SubmissionResult.CORRECT:
                 done = True
                 break
             scrape()
-            update_handlers()
         elif command in ["c", "check"]:
             handler.check()
         elif command.startswith("ef") or command.startswith("example-file"):
