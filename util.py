@@ -252,7 +252,7 @@ class Handler(FileSystemEventHandler):
             if auto_submit:
                 print("> attempt auto-submit")
                 response = submit(self.task_result, self.level)
-                if self.level == 2 and response == SubmissionResult.WRONG_LEVEL:
+                if self.level == 2 and response == SubmissionResult.CORRECT:
                     done = True
                     return
                 scrape()
@@ -277,8 +277,6 @@ observer = Observer()
 event_collector = EventCollector([handler_1.path, handler_2.path])
 watch_1 = observer.schedule(event_collector, day_dir, recursive=False)
 
-
-# Fetch Task
 level = 0
 
 def scrape():
