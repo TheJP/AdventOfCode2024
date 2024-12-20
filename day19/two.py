@@ -6,7 +6,7 @@ types = types.split(", ")
 patterns = patterns.splitlines()
 
 @cache
-def possible(pattern: str) -> bool:
+def possible(pattern: str) -> int:
     global types
 
     if len(pattern) == 0:

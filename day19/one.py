@@ -20,7 +20,6 @@ def possible(pattern: str) -> bool:
     return False
 
 
-
 total = 0
 for pattern in patterns:
     if possible(pattern):
