@@ -167,9 +167,8 @@ total = 0
 input = open(sys.argv[1]).read().splitlines()
 for line in input:
     codes = translate([line], door, "D")
-    min_press = min(sum(solve(f"{part}A") for part in code.split("A")) for code in codes)
+    min_press = min(sum(solve(f"{part}A") for part in code.split("A") if part != "") for code in codes)
     factor = int(line.removesuffix("A"))
-    # I have currently no idea where the "-1" comes from.
-    total += (min_press - 1) * factor
+    total += min_press * factor
 
 print(total)
